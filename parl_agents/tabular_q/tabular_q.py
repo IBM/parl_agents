@@ -89,7 +89,7 @@ class TabularQ(OffPolicyAlgorithm):
         This method is called in ``collect_rollouts()`` after each step in the environment.
         """
         self.exploration_rate = self.exploration_schedule(self._current_progress_remaining)
-        logger.record("rollout/exploration rate", self.exploration_rate)
+        self.logger.record("rollout/exploration rate", self.exploration_rate)
 
     def learn(
         self,
@@ -117,7 +117,7 @@ class TabularQ(OffPolicyAlgorithm):
 
     def _update_learning_rate(self, optimizers: Union[List[th.optim.Optimizer], th.optim.Optimizer] = None) -> None:
         self.policy.learning_rate = self.lr_schedule(self._current_progress_remaining)  # update learning rate
-        logger.record("train/learning_rate", self.policy.learning_rate)
+        self.logger.record("train/learning_rate", self.policy.learning_rate)
 
     def train(self, gradient_steps, batch_size) -> None:
         # gradient_steps is episode length (total number of samples generated during rollout)
@@ -131,8 +131,8 @@ class TabularQ(OffPolicyAlgorithm):
         self._n_updates += gradient_steps
         self.replay_buffer.reset()
 
-        logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
-        logger.record("train/loss", delta_q.max().item())   # this is not loss, but the TD error
+        self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
+        self.logger.record("train/loss", delta_q.max().item())   # this is not loss, but the TD error
 
     def predict(
         self,

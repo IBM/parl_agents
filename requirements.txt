@@ -1,5 +1,5 @@
 #stable-baselines3
--e git+https://github.com/DLR-RM/stable-baselines3.git@v1.5.0#egg=stable_baselines3
+# -e git+https://github.com/DLR-RM/stable-baselines3.git@v1.5.0#egg=stable_baselines3
 gym==0.21.0
 numpy
 torch

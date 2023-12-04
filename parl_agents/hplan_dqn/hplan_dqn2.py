@@ -139,10 +139,15 @@ class HplanDQN2(PaRLBase):
         # set up PaRL model, high level policy, feature extractor
         super()._setup_model()
 
+        # FIXME this change should modify the base class on merge
         self.option_name2ind = dict()
         self.option_name2ind[self.planning_task.name] = 0
         for ind, option in enumerate(self.strips_options, 1):
             self.option_name2ind[option.name] = ind
+
+        # TODO FIXME observation space is different; do this outside of class
+        # self.env = AugmentDiscreteToImg(self.env, discrete_feature_size=len(self.option_name2ind))
+        # self.observation_space = self.env.observation_space
 
         print("{}._setup_model()".format(self.__class__.__name__))
         self._convert_train_freq()
@@ -188,6 +193,9 @@ class HplanDQN2(PaRLBase):
 
         # manually do _setup model
         option_agent._setup_lr_schedule()
+
+        # TODO change buffer class for option learning; share samples, store planning states
+        # FIXME PaRL base could check if Dict needed
         self.sample_buffer[option_name] = DictReplayBuffer(
             buffer_size=self.buffer_size,
             observation_space=self.observation_space,
@@ -336,12 +344,30 @@ class HplanDQN2(PaRLBase):
                 gradient_steps = self.gradient_steps if self.gradient_steps >= 0 else episode_timesteps
                 # Special case when the user passes `gradient_steps=0`
                 if gradient_steps > 0:
+                    # print(self.collected_option_names)
+                    # print(self.collected_pl_states)
                     self.train(gradient_steps)
 
         callback.on_training_end()
         return self
 
     def collect_rollouts(self, env, callback, train_freq, log_interval):
+        """
+        rollout of HplanDQN is sequential.
+        (1) each buffer stores its own sample with shaped rewards
+
+            buffers are not balanced, the rollout was targeting for the whole trajectory
+            we will update options that draw sampling during rollout using collected_option_names
+
+        (2) maintain global buffer, share samples
+            * store s, a, r, s' s'_pl
+            * r is goal_option_reward
+            * use s'_pl to recompute reward for plan option
+
+            this looks better in off-polcy methods. But, there's no on-policy elements when reusing samples.
+            it's more like off-line learning setup
+        """
+
         assert self._last_obs is not None
         assert self._last_pl_state is not None
         assert env.num_envs == 1                            # state mapping already assumed num env is 1
@@ -349,6 +375,9 @@ class HplanDQN2(PaRLBase):
         num_collected_steps, num_collected_episodes = 0, 0
 
         callback.on_rollout_start()
+
+        # this is for sampling the whole episode; could be n_rollout_steps like PPO?
+        # check for the total number of time steps! 2048
         while should_collect_more_steps(train_freq, num_collected_steps, num_collected_episodes):
             self._last_pl_state = self.state_map(self._last_obs)    # In MiniGrid, we read pl sate from env directly
             self.pl_state_option_init = self._last_pl_state     # remember what was the starting pl state
@@ -381,8 +410,11 @@ class HplanDQN2(PaRLBase):
             # only 1 DQN agent; expand input to DQN with option label
             cur_agent = self.option_agents[self.planning_task.name]
             cur_buffer = self.sample_buffer[self.planning_task.name]
+            # cur_option_id = self.option_name2ind[cur_option_name]
 
             cur_agent.policy.set_training_mode(False)
+            # from option_policy, it sees as if the episode was just began now
+            # self._last_episode_starts = np.ones((self.env.num_envs,), dtype=bool)     # DQN buffer doesn't use this
             continue_rollout_cur_option = True
 
             while continue_rollout_cur_option: # and should_collect_more_steps(train_freq, num_collected_steps, num_collected_episodes):
@@ -523,8 +555,14 @@ class HplanDQN2(PaRLBase):
         custom_objects: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
+        # first create HplanDQN agent from scratch by passing all necessary args
+        # then, load individial DDQN agents
+        # this means that we execute all the creation process of PaRLBase upto _setup_model 
+        # but don't use current class _setup_model since it will create one agent
+        # then load DDQN models to self.option_agent dictionary
+
         model = cls(env=env, **kwargs)
-        super(HplanDQN2, model)._setup_model()
+        super(HplanDQN, model)._setup_model()
         # this is the last step before option agent creation in _setup_model
         model._convert_train_freq()     
 

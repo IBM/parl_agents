@@ -46,3 +46,7 @@ class OptionRolloutBuffer(RolloutBuffer):
             # 1 less ensures the batch size is at least 2, currently self.n_envs is 1
             yield self._get_samples(indices[start_idx : start_idx + batch_size])
             start_idx += batch_size
+
+
+# TODO on loading, PPO agent is created
+# it uses sb3 buffer;

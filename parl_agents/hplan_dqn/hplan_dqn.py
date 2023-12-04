@@ -178,6 +178,7 @@ class HplanDQN(PaRLBase):
 
         # manually do _setup model
         option_agent._setup_lr_schedule()
+        # TODO change buffer class for option learning; share samples, store planning states
         self._add_option_buffer(option_name)            
         option_agent.replay_buffer = self.sample_buffer[option_name]
         
@@ -328,6 +329,22 @@ class HplanDQN(PaRLBase):
         return self
 
     def collect_rollouts(self, env, callback, train_freq, log_interval):
+        """
+        rollout of HplanDQN is sequential.
+        (1) each buffer stores its own sample with shaped rewards
+
+            buffers are not balanced, the rollout was targeting for the whole trajectory
+            we will update options that draw sampling during rollout using collected_option_names
+
+        (2) maintain global buffer, share samples
+            * store s, a, r, s' s'_pl
+            * r is goal_option_reward
+            * use s'_pl to recompute reward for plan option
+
+            this looks better in off-polcy methods. But, there's no on-policy elements when reusing samples.
+            it's more like off-line learning setup
+        """
+
         assert self._last_obs is not None
         assert self._last_pl_state is not None
         assert env.num_envs == 1                            # state mapping already assumed num env is 1
@@ -336,6 +353,8 @@ class HplanDQN(PaRLBase):
 
         callback.on_rollout_start()
 
+        # this is for sampling the whole episode; could be n_rollout_steps like PPO?
+        # check for the total number of time steps! 2048
         while should_collect_more_steps(train_freq, num_collected_steps, num_collected_episodes):
             self._last_pl_state = self.state_map(self._last_obs)    # In MiniGrid, we read pl sate from env directly
             self.pl_state_option_init = self._last_pl_state     # remember what was the starting pl state
@@ -373,9 +392,11 @@ class HplanDQN(PaRLBase):
             cur_buffer = self.sample_buffer[cur_option_name]
 
             cur_agent.policy.set_training_mode(False)
+            # from option_policy, it sees as if the episode was just began now
+            # self._last_episode_starts = np.ones((self.env.num_envs,), dtype=bool)     # DQN buffer doesn't use this
             continue_rollout_cur_option = True
 
-            while continue_rollout_cur_option:
+            while continue_rollout_cur_option: # and should_collect_more_steps(train_freq, num_collected_steps, num_collected_episodes):
                 # Select action randomly or according to policy
                 cur_agent._last_obs = self._last_obs
                 actions, buffer_actions = cur_agent._sample_action(cur_agent.learning_starts, None, env.num_envs)
@@ -447,6 +468,22 @@ class HplanDQN(PaRLBase):
                         cur_agent._episode_num += 1
 
                         if log_interval is not None and cur_agent._episode_num % log_interval == 0:
+                            # time_elapsed = time.time() - cur_agent.start_time
+                            # fps = int((cur_agent.num_timesteps - cur_agent._num_timesteps_at_start) / (time_elapsed + 1e-8))
+                            # cur_agent.logger.record("{}/time/fps".format(cur_option_name), fps)
+                            # cur_agent.logger.record("{}/time/episodes".format(cur_option_name), cur_agent._episode_num)
+                            # cur_agent.logger.record("{}/time/time_elapsed".format(cur_option_name), int(time.time() - cur_agent.start_time), exclude="tensorboard")
+                            # cur_agent.logger.record("{}/time/total_timesteps".format(cur_option_name), cur_agent.num_timesteps, exclude="tensorboard")
+                            # if len(cur_agent.ep_info_buffer) > 0 and len(cur_agent.ep_info_buffer[0]) > 0:
+                            #     cur_agent.logger.record("{}/rollout/ep_rew_mean".format(cur_option_name),
+                            #                                safe_mean([ep_info["r"] for ep_info in cur_agent.ep_info_buffer]))
+                            #     cur_agent.logger.record("{}/rollout/ep_len_mean".format(cur_option_name),
+                            #                                safe_mean([ep_info["l"] for ep_info in cur_agent.ep_info_buffer]))
+                            # if len(cur_agent.ep_success_buffer) > 0:
+                            #     cur_agent.logger.record("{}/rollout/ep_success".format(cur_option_name), safe_mean([1 if is_success else 0 for is_success in cur_agent.ep_success_buffer]))
+                            # else:
+                            #     cur_agent.logger.record("{}/rollout/ep_success".format(cur_option_name), 0)
+                            # cur_agent.logger.dump(step=cur_agent.num_timesteps)
                             self.dump_logs(cur_agent, cur_option_name)
 
         callback.on_rollout_end()
@@ -515,6 +552,12 @@ class HplanDQN(PaRLBase):
         custom_objects: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
+        # first create HplanDQN agent from scratch by passing all necessary args
+        # then, load individial DDQN agents
+        # this means that we execute all the creation process of PaRLBase upto _setup_model 
+        # but don't use current class _setup_model since it will create one agent
+        # then load DDQN models to self.option_agent dictionary
+
         model = cls(env=env, **kwargs)
         super(HplanDQN, model)._setup_model()
         # this is the last step before option agent creation in _setup_model

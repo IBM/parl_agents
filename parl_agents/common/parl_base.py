@@ -90,6 +90,7 @@ class PaRLBase(BaseAlgorithm):
         self.parl_policy_learning_rate = self.learning_rate
 
         # parl_task holds unwrapped env
+        # if state mapping sees the internal states of env, this task binds to env passed to __init__
         self.parl_task = parl_task
         self._last_pl_state = None
         self.max_episode_len = max_episode_len
@@ -151,6 +152,9 @@ class PaRLBase(BaseAlgorithm):
         """ forward/appling parl_policy at pl_state.
             self.parl_policy.forward() will override this if it is NN """
         state_str = str(pl_state)
+        if state_str not in self.parl_policy:
+            return None
+
         if get_first:
             return self.parl_policy[state_str][0]
         else:
@@ -271,19 +275,19 @@ class PaRLBase(BaseAlgorithm):
         if is_success:
             shaped_reward += self.option_termination_reward
 
-        shaped_reward = -self.option_step_cost * (1.0 / self.max_episode_len)  # step cost
+        # unit step cost
+        shaped_reward -= self.option_step_cost * (1.0 / self.max_episode_len)  # step cost
 
         shaped_reward *= self.reward_scale
         return [shaped_reward]
 
     def goal_option_shape_zero_reward(self, option_infos):
         assert len(option_infos) == 1
-        shaped_reward = -self.option_step_cost * (1.0/ self.max_episode_len)       # step cost
-
         is_success = option_infos[0].get("is_success")
         if is_success:
-            shaped_reward += self.option_termination_reward
-
+            shaped_reward = self.option_termination_reward
+        else:
+            shaped_reward = 0
         shaped_reward *= self.reward_scale
         return [shaped_reward]
 

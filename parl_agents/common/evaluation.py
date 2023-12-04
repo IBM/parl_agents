@@ -14,6 +14,7 @@ from parl_agents.common.parl_base import PaRLBase
 def evaluate_parl_policy(
         model: PaRLBase,
         env: Union[gym.Env, VecEnv],
+        parl_task,
         n_eval_episodes: int = 10,
         deterministic: bool = True,
         render: bool = False,
@@ -25,6 +26,7 @@ def evaluate_parl_policy(
     """
     adapt stable_baselines3.common.evaluation.evaluate_policy for PaRL
 
+    this is rollout in hplan_ppo. TODO refactor rollout? can be common for DDQN/PPO?
     """
 
     is_monitor_wrapped = False
@@ -60,51 +62,65 @@ def evaluate_parl_policy(
         current_rewards = np.zeros(n_envs)
         current_lengths = np.zeros(n_envs, dtype="int")
         observations = env.reset()
-        pl_state = model.state_map(observations[0])
+        # pl_state = model.state_map(observations[0])
+        pl_state = parl_task.rl_obs_to_pl_state(observations[0])
 
         states = None
         episode_starts = np.ones((env.num_envs,), dtype=bool)
         done = False
-        colected_pl_states = []
+        collected_pl_states = []
         collected_option_names = []
-
+        pl_dead_end = False
         while not done:
 
-            colected_pl_states.append(pl_state)
+            collected_pl_states.append(pl_state)
             option_not_exist = False
-            cur_option = cur_agent = None
-            if model.planning_task.goal_reached(pl_state):
+            cur_option = None
+            cur_agent = None
+            if parl_task.planning_task.goal_reached(pl_state):
                 cur_option_name = model.planning_task.name
             else:
                 pl_state_str = str(pl_state)
                 if pl_state_str not in model.parl_policy:
-                    model.planning_task.initial_state = pl_state
-                    plan_as_policy = model.planner.solve(model.planning_task)
-                    assert plan_as_policy is not None
-                    model.step_parl_policy(plan_as_policy)
-                plan_action = model.forward_parl_policy(pl_state, get_first=True)
-                cur_option = model.strips_options[model.option_name2ind[plan_action]]
-                cur_option_name = cur_option.name
-            collected_option_names.append(cur_option_name)
+                    parl_task.planning_task.initial_state = pl_state
+                    plan_as_policy = model.planner.solve(parl_task.planning_task)
+
+                    # evalutor should not update symbolic policy of agent
+                    # if plan_as_policy is not None:
+                    #     model.step_parl_policy(plan_as_policy)
+                    # else:
+                    if plan_as_policy is None:
+                        pl_dead_end = True
+
+                # during evaluation, if agent encounters deadend, use goal option
+                if not pl_dead_end:
+                    # during evaluation it maybe possible not to have option created
+                    plan_action = model.forward_parl_policy(pl_state, get_first=True)
+                    if plan_action is None:
+                        cur_option = None  # no strips option obect for goal option
+                        cur_option_name = model.planning_task.name
+                    else:
+                        # model.strips_options is parl_task.strips_options
+                        # train task and eval task should have identical options
+                        cur_option = model.strips_options[model.option_name2ind[plan_action]]
+                        cur_option_name = cur_option.name
+                else:
+                    cur_option = None       # no strips option obect for goal option
+                    cur_option_name = model.planning_task.name
+                pl_dead_end = False
 
             if cur_option_name in model.option_agents:
                 cur_agent = model.option_agents[cur_option_name]
-                option_not_exist = False
-                continue_rollout_cur_option = True
             else:
-                option_not_exist = True
-                continue_rollout_cur_option = False
+                # use goal option as emergency policy during evaluation
+                cur_option_name = model.planning_task.name
+                cur_agent = model.option_agents[cur_option_name]
+            collected_option_names.append(cur_option_name)
 
+            # start unrolling options
             option_episode_starts = np.ones((env.num_envs,), dtype=bool)
-            # option_current_rewards = 0
-            # option_current_length = 0
-
-            if option_not_exist:
-                done = True
-
-            # strat unrolling options
+            continue_rollout_cur_option = True
             while continue_rollout_cur_option:
-
                 # sample transition from the current option agent
                 actions, states = cur_agent.predict(observations,
                                                     state=states,
@@ -113,9 +129,8 @@ def evaluate_parl_policy(
                 observations, rewards, dones, infos = env.step(actions)
                 current_rewards += rewards
                 current_lengths += 1
-                # option_current_rewards += rewards
-                # option_current_length += 1
-                pl_state = model.state_map(observations[0])
+                # pl_state = model.state_map(observations[0])
+                pl_state = parl_task.rl_obs_to_pl_state(observations[0])
 
                 reward = rewards[0]
                 done = dones[0]
@@ -135,9 +150,9 @@ def evaluate_parl_policy(
                         episode_rewards.append(current_rewards[0])
                         episode_lengths.append(current_lengths[0])
                         episode_counts += 1
-                    # reset current episode rewards and length?
-                    current_rewards[0] = 0
-                    current_lengths[0] = 0
+                        # reset current episode rewards and length
+                        current_rewards = np.zeros(n_envs)
+                        current_lengths = np.zeros(n_envs, dtype="int")
 
                 # decide_option_termination
                 option_done, option_info = False, dict()
@@ -181,8 +196,23 @@ def evaluate_parl_policy(
                             option_done = False  # goal option reaching RL goal, current goal option done, reset env
                             continue_rollout_cur_option = True
 
+                # if option_done:
+                #     option_episode_rewards[cur_option_name].append(option_current_rewards)
+                #     option_episode_lengths[cur_option_name].append(option_current_length)
+
                 if render:
                     env.render()
+
+        # print("Evaluation: {}/{}".format(episode_counts+1, episode_count_targets))
+        # s = iter(colected_pl_states)
+        # a = iter(collected_option_names)
+        # print("num_options:{}".format(len(collected_option_names)))
+        # while True:
+        #     try:
+        #         print(next(str(s)))
+        #         print(next(a))
+        #     except:
+        #         break
 
     mean_reward = np.mean(episode_rewards)
     std_reward = np.std(episode_rewards)

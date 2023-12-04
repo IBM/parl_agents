@@ -183,6 +183,19 @@ class HplanPPO(PaRLBase):
         self._add_option_buffer(option_name)        # create rollout buffer from PaRLBase
         option_agent.rollout_buffer = self.sample_buffer[option_name]
 
+        # self.option_policy_kwargs = {
+        #     "observation_space": self.observation_space,
+        #     "action_space": self.action_space,
+        #     "lr_schedule": self.option_policy_learning_rate,
+        #     "feature_extractor": BabyAIFullyObsCNN(self.observation_space),
+        #     "net_arch": [dict(pi=[128, 64], vf=[128, 64])]
+        # }
+        # self.option_policy_kwargs.update(
+        #     dict(observation_space=self.observation_space,
+        #          action_space=option_agent.action_space,
+        #          lr_schedule=option_agent.lr_schedule)
+        # )
+        # option_agent.policy = self.option_agent_policy(**self.option_policy_kwargs)
         option_agent.policy = self.option_agent_policy(
             option_agent.observation_space,
             option_agent.action_space, 
@@ -226,8 +239,13 @@ class HplanPPO(PaRLBase):
         option_agent._num_timesteps_at_start = option_agent.num_timesteps
 
         if not option_agent._custom_logger:
-            option_agent._logger = configure_logger(self.verbose,
-                                                    self.tensorboard_log, tb_log_name, reset_num_timesteps)
+            if self.tensorboard_log is None:
+                option_tb_log = None
+            else:
+                option_tb_log = os.path.join(self.tensorboard_log, self.__class__.__name__ + "_" + str(self.latest_run_id))
+            option_tb_log_name = tb_log_name.split("/")[-1]
+            option_agent._logger = configure_logger(self.verbose, tensorboard_log=option_tb_log, tb_log_name=option_tb_log_name,reset_num_timesteps=reset_num_timesteps)
+
         # don't create eval env for option agent!
         return total_timesteps
 
@@ -281,7 +299,9 @@ class HplanPPO(PaRLBase):
         option_total_timesteps: int = 1e5,
     ):
         tb_log_name = self.__class__.__name__
-        self.latest_run_id = get_latest_run_id(self.tensorboard_log, tb_log_name) + 1
+        self.latest_run_id = get_latest_run_id(self.tensorboard_log, tb_log_name)
+        if reset_num_timesteps:
+            self.latest_run_id += 1
         # self.option_log_save_path = os.path.join(tensorboard_log, f"{tb_log_name}_{latest_run_id + 1}")
 
         iteration = 0
@@ -302,7 +322,9 @@ class HplanPPO(PaRLBase):
             self.collected_pl_states = []
 
             n_rollout_steps = max(self.max_episode_len, self.n_steps)
+            # print("BEGIN::outer_iter={}".format(iteration+1))
             continue_training = self.collect_rollouts(self.env, callback, n_rollout_steps)
+            # print("END::outer_iter={}".format(iteration+1))
             if not continue_training:
                 break
 
@@ -324,30 +346,28 @@ class HplanPPO(PaRLBase):
                                                                             for is_success in self.ep_success_buffer]))
                     else:
                         self.logger.record("rollout/ep_success", 0)
-                self.logger.record("time/fps", fps)
+                self.logger.record("time/fps", fps, exclude="tensorboard")
                 self.logger.record("time/time_elapsed", int(time.time() - self.start_time), exclude="tensorboard")
                 self.logger.record("time/total_timesteps", self.num_timesteps, exclude="tensorboard")
                 self.logger.dump(step=self.num_timesteps)
 
-            for option_name in sorted(set(self.collected_option_names)):
-                option_agent = self.option_agents[option_name]
-                option_agent.logger.record("{}/time/iterations".format(option_name), iteration, exclude="tensorboard")
-                if len(option_agent.ep_info_buffer) > 0 and len(option_agent.ep_info_buffer[0]) > 0:
-                    option_agent.logger.record("{}/rollout/ep_rew_mean".format(option_name),
-                                       safe_mean([ep_info["r"] for ep_info in option_agent.ep_info_buffer]))
-                    option_agent.logger.record("{}/rollout/ep_len_mean".format(option_name),
-                                       safe_mean([ep_info["l"] for ep_info in option_agent.ep_info_buffer]))
-                if len(option_agent.ep_success_buffer) > 0:
-                    option_agent.logger.record("{}/rollout/ep_success".format(option_name), safe_mean([1 if is_success else 0
-                                                                                  for is_success in option_agent.ep_success_buffer]))
-                else:
-                    option_agent.logger.record("{}/rollout/ep_success".format(option_name), 0)
-                option_agent.logger.record("{}/time/time_elapsed".format(option_name), int(time.time() - option_agent.start_time), exclude="tensorboard")
-                option_agent.logger.record("{}/time/total_timesteps".format(option_name), option_agent.num_timesteps, exclude="tensorboard")
-                option_agent.logger.dump(step=option_agent.num_timesteps)
+                for option_name in sorted(set(self.collected_option_names)):
+                    option_agent = self.option_agents[option_name]
+                    option_agent.logger.record("{}/time/iterations".format(option_name), iteration, exclude="tensorboard")
+                    if len(option_agent.ep_info_buffer) > 0 and len(option_agent.ep_info_buffer[0]) > 0:
+                        option_agent.logger.record("{}/rollout/ep_rew_mean".format(option_name),
+                                           safe_mean([ep_info["r"] for ep_info in option_agent.ep_info_buffer]))
+                        option_agent.logger.record("{}/rollout/ep_len_mean".format(option_name),
+                                           safe_mean([ep_info["l"] for ep_info in option_agent.ep_info_buffer]))
+                    if len(option_agent.ep_success_buffer) > 0:
+                        option_agent.logger.record("{}/rollout/ep_success".format(option_name), safe_mean([1 if is_success else 0
+                                                                                      for is_success in option_agent.ep_success_buffer]))
+                    else:
+                        option_agent.logger.record("{}/rollout/ep_success".format(option_name), 0)
+                    option_agent.logger.record("{}/time/time_elapsed".format(option_name), int(time.time() - option_agent.start_time), exclude="tensorboard")
+                    option_agent.logger.record("{}/time/total_timesteps".format(option_name), option_agent.num_timesteps, exclude="tensorboard")
+                    option_agent.logger.dump(step=option_agent.num_timesteps)
 
-            # print(self.collected_option_names)
-            # print(self.collected_pl_states)
             self.train()
 
         callback.on_training_end()
@@ -364,8 +384,14 @@ class HplanPPO(PaRLBase):
             self.sample_buffer[option_name].reset()         # on policy method cleans up buffer
 
         callback.on_rollout_start()
-
+        pl_dead_end = False
+        inner_iteration=0
         while n_steps < n_rollout_steps:
+            # print("BEGIN::inner_iter={}".format(inner_iteration))
+            inner_iteration += 1
+            # self._last_obs is not None after _setup_learn since it will reset env
+            # dummy_vec_env resets env as it sees done=True,
+            # so _last_obs will never be None in SB3
             self._last_pl_state = self.state_map(self._last_obs)    # In MiniGrid, we read pl sate from env directly
             self.pl_state_option_init = self._last_pl_state     # remember what was the starting pl state
             self.collected_pl_states.append(self.pl_state_option_init)  # record pl states during rollout
@@ -373,37 +399,48 @@ class HplanPPO(PaRLBase):
             t_start_option = time.time()
             step_count_option = 0
 
-            print("starting_state:{}".format(self._last_pl_state))
+            # print("inner_iter={}::starting_state={}".format(inner_iteration, ",".join(sorted([ii for ii in self._last_pl_state]))))
             cur_option = cur_agent = None
+            pl_dead_end = False
             if self.planning_task.goal_reached(self.pl_state_option_init):
                 cur_option_name = self.planning_task.name
-                print("goal_reached:{}".format(cur_option_name))
+                # print("inner_iter={}::goal_reached={}".format(inner_iteration, cur_option_name))
             else:
                 pl_state_str = str(self.pl_state_option_init)
                 if pl_state_str not in self.parl_policy:
                     self.planning_task.initial_state = self.pl_state_option_init
                     plan_as_policy = self.planner.solve(self.planning_task)
-                    assert plan_as_policy is not None
-                    self.step_parl_policy(plan_as_policy)
-                plan_action = self.forward_parl_policy(self.pl_state_option_init, get_first=True)
-                # print("s={}->a={}".format(pl_state_str, plan_action))
-                cur_option = self.strips_options[self.option_name2ind[plan_action]]
-                cur_option_name = cur_option.name
+                    # assert plan_as_policy is not None
+                    # no applicable plan exists due to deadends
+                    if plan_as_policy is not None:
+                        self.step_parl_policy(plan_as_policy)
+                    else:
+                        # print("inner_iter={}::deadend_state={}".format(inner_iteration, ",".join(sorted([ii for ii in self._last_pl_state]))))
+                        pl_dead_end = True
+                        # env.reset()
+                if not pl_dead_end:
+                    plan_action = self.forward_parl_policy(self.pl_state_option_init, get_first=True)
+                    # print("s={}->a={}".format(pl_state_str, plan_action))
+                    cur_option = self.strips_options[self.option_name2ind[plan_action]]
+                    cur_option_name = cur_option.name
 
-            self.collected_option_names.append(cur_option_name)
-            if cur_option_name in self.option_agents:
-                cur_agent = self.option_agents[cur_option_name]
+            if not pl_dead_end:
+                self.collected_option_names.append(cur_option_name)
+                if cur_option_name in self.option_agents:
+                    cur_agent = self.option_agents[cur_option_name]
+                else:
+                    self.create_option_agent(cur_option_name)
+                    cur_agent = self.option_agents[cur_option_name]
+                    self._setup_learn_option_agent(cur_agent, self.option_total_timesteps, True,
+                                                   self.__class__.__name__ + "_" + str(self.latest_run_id) + "/" + cur_option_name)
+                cur_buffer = self.sample_buffer[cur_option_name]
+
+                cur_agent.policy.set_training_mode(False)
+                # from option_policy, it sees as if the episode was just began now
+                self._last_episode_starts = np.ones((self.env.num_envs,), dtype=bool)
+                continue_rollout_cur_option = True
             else:
-                self.create_option_agent(cur_option_name)
-                cur_agent = self.option_agents[cur_option_name]
-                self._setup_learn_option_agent(cur_agent, self.option_total_timesteps, True,
-                                               self.__class__.__name__ + "_" + str(self.latest_run_id) + "/" + cur_option_name)
-            cur_buffer = self.sample_buffer[cur_option_name]
-
-            cur_agent.policy.set_training_mode(False)
-            # from option_policy, it sees as if the episode was just began now
-            self._last_episode_starts = np.ones((self.env.num_envs,), dtype=bool)
-            continue_rollout_cur_option = True
+                continue_rollout_cur_option = False
 
             while continue_rollout_cur_option and n_steps < n_rollout_steps:
 
@@ -475,11 +512,17 @@ class HplanPPO(PaRLBase):
                 self._last_episode_starts = option_dones
                 self._last_pl_state = new_pl_state
 
-            with th.no_grad():
-                # Compute value for the last timestep
-                values = cur_agent.policy.predict_values(obs_as_tensor(new_obs, self.device))
-            cur_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
+            if not pl_dead_end:
+                assert cur_agent is not None
+                with th.no_grad():
+                    # Compute value for the last timestep
+                    values = cur_agent.policy.predict_values(obs_as_tensor(new_obs, self.device))
+                cur_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
+            else:
+                pl_dead_end = False
+                env.reset()
 
+            # print("END::inner_iter={}".format(inner_iteration))
 
         callback.on_rollout_end()
 
@@ -504,6 +547,11 @@ class HplanPPO(PaRLBase):
         custom_objects: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
+        # first create HplanPPO agent from scratch by passing all necessary args
+        # then, load individial PPO agents
+        # this means that we execute all the creation process of PaRLBase upto _setup_model 
+        # but don't use current class _setup_model since it will create one agent
+        # then load PPO models to self.option_agent dictionary
         model = cls(env=env, **kwargs)
         super(HplanPPO, model)._setup_model()
 

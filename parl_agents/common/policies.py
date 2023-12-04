@@ -5,6 +5,8 @@ Extending SB3 Policy classes to support PaRL agents
   the option agent policy network will share it.
 * In HRL architecture, high level NN policy interface can be different from
   option agent
+* for AC/PPO we also checked hyper-parameters and architectures from
+  https://github.com/mila-iqia/babyai/blob/dyth-v1.1-and-baselines/babyai/model.py
 """
 import collections
 import copy
@@ -265,6 +267,21 @@ class ActorCriticSeparatePolicy(ActorCriticPolicy):
             last_layer_dim_vf = vf_layer_size
         value_net.append(nn.Linear(last_layer_dim_vf, 1))
         self.value_net = nn.Sequential(*value_net).to(self.device)
+
+        # if self.ortho_init:       always do initialization
+            # TODO: check for features_extractor
+            # Values from stable-baselines.
+            # features_extractor/mlp values are
+            # originally from openai/baselines (default gains/init_scales).
+            # module_gains = {
+            #     # self.features_extractor: np.sqrt(2),      #  use its own init
+            #     # self.mlp_extractor: np.sqrt(2),           # no mlp_extractor
+            #     self.action_net: 0.01,
+            #     self.policy_net:1,
+            #     self.value_net: 1
+            # }
+            # for module, gain in module_gains.items():
+            #     module.apply(partial(self.init_weights, gain=gain))
 
         for module in [self.policy_net, self.action_net, self.value_net]:
             module.apply(initialize_parameters)
